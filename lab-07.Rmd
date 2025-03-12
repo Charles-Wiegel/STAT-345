@@ -19,3 +19,4 @@ knitr::opts_chunk$set(echo = TRUE)
 4.  Edit your code. You can change the code or add new lines. Commit and push again.
 5.  Submit the link to your repository on Canvas.
 6.  Have a great break!
+7.  Watch the Cubs win!
