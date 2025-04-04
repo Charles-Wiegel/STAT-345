@@ -1,0 +1,201 @@
+---
+title: "Milwaukee Bucks Summary Report Code"
+author: "Charles Wiegel"
+date: "2025-04-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Library
+
+```{r}
+library(ggplot2) #data visualization
+library(tidyverse) # data manipulation and visualization
+library(nbastatR) #NBA data and statistics
+library(devtools) #development and management of R packages
+library(cowplot) #helps with ggplot2
+library(jsonlite) #working with JSON data
+library(httr) #handle http requests
+```
+
+Court Creation
+
+```{r}
+# Function to create points for a circle (used for creating hoops, foul circles, etc.)
+circle_points = function(center=c(0,0), radius = 1, npoints = 360) {
+  angles = seq(0, 2 * pi, length.out = npoints) # Create angles for a full circle
+  return(data_frame(x = center[1] + radius * cos(angles),  # X coordinates for the circle
+                    y = center[2] + radius * sin(angles)))  # Y coordinates for the circle
+}
+
+# Court dimensions and line measurements
+width = 50  # Width of the court
+height = 94 / 2  # Half the height of the court (for the half-court view)
+key_height = 19  # Height of the key (paint area)
+inner_key_width = 12  # Inner width of the key
+outer_key_width = 16  # Outer width of the key
+backboard_width = 6  # Width of the backboard
+backboard_offset = 4  # Offset of the backboard from the baseline
+neck_length = 0.5  # Length of the hoop neck
+hoop_radius = 0.75  # Radius of the hoop
+hoop_center_y = backboard_offset + neck_length + hoop_radius  # Y position of the hoop center
+three_point_radius = 23.75  # Radius for the three-point line
+three_point_side_radius = 22  # Radius for the side three-point line
+three_point_side_height = 14  # Height for the side three-point line
+
+# Function to plot the court based on the given dimensions
+plot_court = function(court_theme = court_theme$light, use_short_three = FALSE) {
+  # Adjust for short three-point line if specified
+  if (use_short_three) {
+    three_point_radius = 22
+    three_point_side_height = 0
+  }
+  
+  # Create the main perimeter of the court
+  court_points = data.frame(
+    x = c(width / 2, width / 2, -width / 2, -width / 2, width / 2),
+    y = c(height, 0, 0, height, height),
+    desc = "perimeter"
+  )
+  
+  # Add the backboard to the court
+  court_points = bind_rows(court_points, data_frame(
+    x = c(-backboard_width / 2, backboard_width / 2),
+    y = c(backboard_offset, backboard_offset),
+    desc = "backboard"
+  ))
+  
+  # Add the hoop neck to the court
+  court_points = bind_rows(court_points, data.frame(
+    x = c(0, 0), y = c(backboard_offset, backboard_offset + neck_length), desc = "neck"
+  ))
+  
+  # Create the foul circle for the key area
+  foul_circle = circle_points(center = c(0, key_height), radius = inner_key_width / 2)
+  
+  # Separate the top and bottom parts of the foul circle
+  foul_circle_top = filter(foul_circle, y > key_height) %>% 
+    mutate(desc = "foul_circle_top")
+  
+  foul_circle_bottom = filter(foul_circle, y < key_height) %>%
+    mutate(
+      angle = atan((y - key_height) / x) * 180 / pi,
+      angle_group = floor((angle - 5.625) / 11.25),
+      desc = paste0("foul_circle_bottom_", angle_group)
+    ) %>%
+    filter(angle_group %% 2 == 0) %>%
+    select(x, y, desc)
+  
+  # Create the hoop
+  hoop = circle_points(center = c(0, hoop_center_y), radius = hoop_radius) %>%
+    mutate(desc = "hoop")
+  
+  # Create the restricted area (semi-circle around the hoop)
+  restricted = circle_points(center = c(0, hoop_center_y), radius = 4) %>%
+    filter(y >= hoop_center_y) %>%
+    mutate(desc = "restricted")
+  
+  # Create the three-point arc (circle)
+  three_point_circle = circle_points(center = c(0, hoop_center_y), radius = three_point_radius) %>%
+    filter(y >= three_point_side_height, y >= hoop_center_y)
+  
+  # Create the three-point line
+  three_point_line = data_frame(
+    x = c(three_point_side_radius, three_point_side_radius, three_point_circle$x, -three_point_side_radius, -three_point_side_radius),
+    y = c(0, three_point_side_height, three_point_circle$y, three_point_side_height, 0),
+    desc = "three_point_line"
+  )
+  
+  # Combine all the court components into one data frame
+  court_points = bind_rows(
+    court_points,
+    foul_circle_top,
+    foul_circle_bottom,
+    hoop,
+    restricted, 
+    three_point_line
+  )
+  
+  # Final court plot creation using ggplot2
+  ggplot() +
+    geom_path(
+      data = court_points,
+      aes(x = x, y = y, group = desc),
+      color = court_theme$lines  # Use the theme color for the lines
+    ) +
+    coord_fixed(ylim = c(0, 45), xlim = c(-25, 25)) +  # Set the fixed aspect ratio and plot limits
+    theme_minimal(base_size = 22) +  # Minimal theme with specified base font size
+    theme(
+      text = element_text(color = court_theme$text),  # Set text color
+      plot.background = element_rect(fill = 'gray20', color = 'gray20'),  # Set plot background color
+      panel.background = element_rect(fill = court_theme$court, color = court_theme$court),  # Court background color
+      panel.grid = element_blank(),  # Remove gridlines
+      panel.border = element_blank(),  # Remove panel borders
+      axis.text = element_blank(),  # Remove axis text
+      axis.title = element_blank(),  # Remove axis titles
+      axis.ticks = element_blank(),  # Remove axis ticks
+      legend.background = element_rect(fill = court_theme$court, color = court_theme$court),  # Set legend background color
+      legend.margin = margin(-1, 0, 0, 0, unit = "lines"),  # Adjust legend margin
+      legend.position = "bottom",  # Position legend at the bottom
+      legend.key = element_blank(),  # Remove legend keys
+      legend.text = element_text(size = rel(1.0))  # Set legend text size
+    )
+}
+  
+```
+
+
+NBA data
+
+```{r}
+# Grab team shot data for the Milwaukee Bucks for the 2023 season
+bucks <- teams_shots(teams = "Milwaukee Bucks", seasons = 2023) %>%
+  
+  # Transform the shot locations (locationX and locationY) to numeric values
+  # and scale the coordinates for plotting (divide by 10 to adjust to court dimensions)
+  mutate(x = as.numeric(as.character(locationX)) / 10, 
+         y = as.numeric(as.character(locationY)) / 10 + hoop_center_y)
+
+# Invert the x-coordinates to align the data with the court orientation
+bucks$x <- bucks$x * -1
+```
+court visualization
+```{r}
+# Plot the court with the specified theme and shot data for the Milwaukee Bucks
+plot_court(court_theme$ppt, use_short_three = F) +
+  
+  # Add shot points to the court
+  geom_point(data = bucks, aes(x = x, y = y, color = isShotMade, fill = isShotMade),
+             size = 2, shape = 21, stroke = 0.25) +  # Points for each shot with color and fill based on whether the shot was made
+
+  # Define custom color for points based on whether the shot was made (green for made, red for missed)
+  scale_color_manual(values = c("green4", "red2"), aesthetics = "color", breaks = c("TRUE", "FALSE"), 
+                     labels = c("Shot Made", "Shot Missed")) +  # Color scale for points' borders
+  
+  # Define custom fill for points based on whether the shot was made
+  scale_fill_manual(values = c("green", "red4"), aesthetics = "fill", breaks = c("TRUE", "FALSE"), 
+                    labels = c("Shot Made", "Shot Missed")) +  # Fill color for points
+  
+  # Customize plot appearance
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold", vjust = -4),  # Title customization
+    plot.subtitle = element_text(hjust = 0.5, size = 4, face = "bold", vjust = -8),  # Subtitle customization
+    legend.position = c(0.5, 0),  # Position legend at the bottom center
+    legend.direction = "horizontal",  # Set legend direction to horizontal
+    legend.title = element_blank(),  # Remove legend title
+    legend.text = element_text(hjust = 0.5, size = 10, face = "bold", color = "white")  # Customize legend text style
+  ) +
+  
+  # Add plot title
+  ggtitle(label = "Milwaukee Bucks Shot Chart")
+```
+
+
+
+
+
+
+
